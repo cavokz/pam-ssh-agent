@@ -1,0 +1,605 @@
+pam-ssh-agent: Bootstrap the developemnt / testing cycle
+
+Add a minimal implementation of the PAM ssh-agent module, hook up all the
+build and test infrastructure, add minimal tests for arguments validation.
+
+The module is built as shared object, PIC versions of libssh and
+libopenbsd-compat are therefore built if needed.
+
+Testing is based on pam_wrapper and is enabled only if the required
+libraries and headers are found during configuration.
+
+During test ssh keys of various types are used. The ktype.sh script is
+split so to reuse the keys generation part.
+
+The module is not built by default.
+
+Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
+
+---
+ Makefile.in                  |   27 ++++++++++++-
+ config.h.in                  |    9 ++++
+ configure.ac                 |   35 +++++++++++++++++
+ openbsd-compat/Makefile.in   |   13 +++++-
+ pam-ssh-agent.c              |   88 +++++++++++++++++++++++++++++++++++++++++++
+ regress/Makefile             |    2 +
+ regress/keytype.sh           |   41 --------------------
+ regress/keytype_gen.sh       |   43 +++++++++++++++++++++
+ regress/pam-ssh-agent-test.c |   48 +++++++++++++++++++++++
+ regress/pam-ssh-agent.sh     |   43 +++++++++++++++++++++
+ 10 files changed, 305 insertions(+), 44 deletions(-)
+
+Index: b/regress/pam-ssh-agent-test.c
+===================================================================
+--- /dev/null
++++ b/regress/pam-ssh-agent-test.c
+@@ -0,0 +1,48 @@
++/*
++ * Copyright (c) 2020 Domenico Andreoli
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdlib.h>
++#include <libpamtest.h>
++
++int
++main(int argc, char **argv)
++{
++	int ret;
++
++	struct pam_testcase tests[] = {
++		pam_test(PAMTEST_AUTHENTICATE, PAM_SUCCESS),
++		pam_test(PAMTEST_SETCRED, PAM_SUCCESS),
++	};
++
++	ret = run_pamtest(argv[0], getenv("USER"), NULL, tests);
++	if (ret) {
++		if (ret == PAMTEST_ERR_CASE)
++			ret = pamtest_failed_case(tests)->op_rv;
++		else
++			ret = 1;
++	}
++
++	return ret;
++}
+Index: b/regress/Makefile
+===================================================================
+--- a/regress/Makefile
++++ b/regress/Makefile
+@@ -16,6 +16,7 @@ prep:
+ clean:
+ 	for F in $(CLEANFILES); do rm -f $(OBJ)$$F; done
+ 	rm -rf $(OBJ).putty
++	rm -rf $(OBJ)pam-ssh-agent-test.d
+ 
+ distclean:	clean
+ 
+@@ -92,6 +93,7 @@ LTESTS= 	connect \
+ 		allow-deny-users \
+ 		authinfo \
+ 		sshsig \
++		pam-ssh-agent \
+ 		keygen-comment
+ 
+ 
+Index: b/Makefile.in
+===================================================================
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -29,6 +29,8 @@ PRIVSEP_PATH=@PRIVSEP_PATH@
+ SSH_PRIVSEP_USER=@SSH_PRIVSEP_USER@
+ STRIP_OPT=@STRIP_OPT@
+ TEST_SHELL=@TEST_SHELL@
++PAM_SSH_AGENT=@PAM_SSH_AGENT@
++PAM_SSH_AGENT_TEST=@PAM_SSH_AGENT_TEST@
+ 
+ PATHS= -DSSHDIR=\"$(sysconfdir)\" \
+ 	-D_PATH_SSH_PROGRAM=\"$(SSH_PROGRAM)\" \
+@@ -68,7 +70,7 @@ MKDIR_P=@MKDIR_P@
+ 
+ .SUFFIXES: .lo
+ 
+-TARGETS=ssh$(EXEEXT) sshd$(EXEEXT) ssh-add$(EXEEXT) ssh-keygen$(EXEEXT) ssh-keyscan${EXEEXT} ssh-keysign${EXEEXT} ssh-pkcs11-helper$(EXEEXT) ssh-agent$(EXEEXT) scp$(EXEEXT) sftp-server$(EXEEXT) sftp$(EXEEXT) ssh-sk-helper$(EXEEXT)
++TARGETS=ssh$(EXEEXT) sshd$(EXEEXT) ssh-add$(EXEEXT) ssh-keygen$(EXEEXT) ssh-keyscan${EXEEXT} ssh-keysign${EXEEXT} ssh-pkcs11-helper$(EXEEXT) ssh-agent$(EXEEXT) scp$(EXEEXT) sftp-server$(EXEEXT) sftp$(EXEEXT) ssh-sk-helper$(EXEEXT) $(PAM_SSH_AGENT)
+ 
+ XMSS_OBJS=\
+ 	ssh-xmss.o \
+@@ -152,6 +154,9 @@ SFTPSERVER_OBJS=sftp-common.o sftp-serve
+ 
+ SFTP_OBJS=	sftp.o sftp-client.o sftp-common.o sftp-glob.o progressmeter.o
+ 
++# These need to be compiled with -fPIC, so they are treated differently.
++PAM_SSH_AGENT_OBJS=pam-ssh-agent.lo $(SKHELPER_OBJS:.o=.lo)
++
+ MANPAGES	= moduli.5.out scp.1.out ssh-add.1.out ssh-agent.1.out ssh-keygen.1.out ssh-keyscan.1.out ssh.1.out sshd.8.out sftp-server.8.out sftp.1.out ssh-keysign.8.out ssh-pkcs11-helper.8.out ssh-sk-helper.8.out sshd_config.5.out ssh_config.5.out
+ MANPAGES_IN	= moduli.5 scp.1 ssh-add.1 ssh-agent.1 ssh-keygen.1 ssh-keyscan.1 ssh.1 sshd.8 sftp-server.8 sftp.1 ssh-keysign.8 ssh-pkcs11-helper.8 ssh-sk-helper.8 sshd_config.5 ssh_config.5
+ MANTYPE		= @MANTYPE@
+@@ -187,6 +192,7 @@ all: configure-check $(CONFIGFILES) $(MA
+ $(LIBSSH_OBJS): Makefile.in config.h
+ $(SSHOBJS): Makefile.in config.h
+ $(SSHDOBJS): Makefile.in config.h
++$(PAM_SSH_AGENT_OBJS): Makefile.in config.h
+ configure-check: $(srcdir)/configure
+ 
+ $(srcdir)/configure: configure.ac aclocal.m4
+@@ -198,13 +204,20 @@ $(srcdir)/configure: configure.ac acloca
+ 
+ LIBCOMPAT=openbsd-compat/libopenbsd-compat.a
+ $(LIBCOMPAT): always
+-	(cd openbsd-compat && $(MAKE))
++	(cd openbsd-compat && $(MAKE) libopenbsd-compat.a)
++LIBCOMPAT_PIC=openbsd-compat/libopenbsd-compat-pic.a
++$(LIBCOMPAT_PIC): always
++	(cd openbsd-compat && $(MAKE) libopenbsd-compat-pic.a)
+ always:
+ 
+ libssh.a: $(LIBSSH_OBJS)
+ 	$(AR) rv $@ $(LIBSSH_OBJS)
+ 	$(RANLIB) $@
+ 
++libssh-pic.a: $(LIBSSH_OBJS:.o=.lo)
++	$(AR) rv $@ $(LIBSSH_OBJS:.o=.lo)
++	$(RANLIB) $@
++
+ ssh$(EXEEXT): $(LIBCOMPAT) libssh.a $(SSHOBJS)
+ 	$(LD) -o $@ $(SSHOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHLIBS) $(LIBS) $(GSSLIBS)
+ 
+@@ -241,6 +254,9 @@ sftp-server$(EXEEXT): $(LIBCOMPAT) libss
+ sftp$(EXEEXT): $(LIBCOMPAT) libssh.a $(SFTP_OBJS)
+ 	$(LD) -o $@ $(SFTP_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(LIBS) $(LIBEDIT)
+ 
++pam_ssh_agent.so: $(PAM_SSH_AGENT_OBJS) libssh-pic.a $(LIBCOMPAT_PIC)
++	$(LD) -o $@ $(PAM_SSH_AGENT_OBJS) $(LDFLAGS_NOPIE) -shared -lpam -lssh-pic -lopenbsd-compat-pic $(LIBS)
++
+ # test driver for the loginrec code - not built by default
+ logintest: logintest.o $(LIBCOMPAT) libssh.a loginrec.o
+ 	$(LD) -o $@ logintest.o $(LDFLAGS) loginrec.o -lopenbsd-compat -lssh $(LIBS)
+@@ -271,6 +287,7 @@ clean:	regressclean
+ 	rm -f *.out core survey
+ 	rm -f regress/check-perm$(EXEEXT)
+ 	rm -f regress/mkdtemp$(EXEEXT)
++	rm -f regress/pam-ssh-agent-test$(EXEEXT)
+ 	rm -f regress/unittests/test_helper/*.a
+ 	rm -f regress/unittests/test_helper/*.o
+ 	rm -f regress/unittests/sshbuf/*.o
+@@ -304,6 +321,7 @@ distclean:	regressclean
+ 	rm -rf autom4te.cache
+ 	rm -f regress/check-perm
+ 	rm -f regress/mkdtemp
++	rm -f regress/pam-ssh-agent-test
+ 	rm -f regress/unittests/test_helper/*.a
+ 	rm -f regress/unittests/test_helper/*.o
+ 	rm -f regress/unittests/sshbuf/*.o
+@@ -521,6 +539,9 @@ regress/mkdtemp$(EXEEXT): $(srcdir)/regr
+ 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(srcdir)/regress/mkdtemp.c \
+ 	$(LDFLAGS) -lssh -lopenbsd-compat -lssh -lopenbsd-compat $(LIBS)
+ 
++regress/pam-ssh-agent-test$(EXEEXT): $(srcdir)/regress/pam-ssh-agent-test.c
++	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(srcdir)/regress/pam-ssh-agent-test.c $(LDFLAGS) -lpamtest
++
+ UNITTESTS_TEST_HELPER_OBJS=\
+ 	regress/unittests/test_helper/test_helper.o \
+ 	regress/unittests/test_helper/fuzz.o
+@@ -650,6 +671,7 @@ regress-binaries: regress-prep $(LIBCOMP
+ 	regress/netcat$(EXEEXT) \
+ 	regress/check-perm$(EXEEXT) \
+ 	regress/mkdtemp$(EXEEXT) \
++	$(PAM_SSH_AGENT_TEST) \
+ 	$(SK_DUMMY_LIBRARY)
+ 
+ regress-unit-binaries: regress-prep $(REGRESSLIBS) \
+@@ -686,6 +708,7 @@ interop-tests t-exec file-tests: regress
+ 		PATH="$${BUILDDIR}:$${PATH}" \
+ 		TEST_ENV=MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
+ 		TEST_MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
++		TEST_PAM_SSH_AGENT="$(or $(PAM_SSH_AGENT_TEST),no)" \
+ 		TEST_SSH_SCP="$${BUILDDIR}/scp" \
+ 		TEST_SSH_SSH="$${BUILDDIR}/ssh" \
+ 		TEST_SSH_SSHD="$${BUILDDIR}/sshd" \
+Index: b/regress/pam-ssh-agent.sh
+===================================================================
+--- /dev/null
++++ b/regress/pam-ssh-agent.sh
+@@ -0,0 +1,43 @@
++#       Placed in the Public Domain.
++
++# Kudos to the Samba team, pam_wrapper made this module possible
++#
++#   https://cwrap.org/pam_wrapper.html
++#   https://lwn.net/Articles/671094/
++
++if [ "x$TEST_PAM_SSH_AGENT" = "xno" ]; then
++	verbose "PAM ssh-agent testing is disabled, skipping tests..."
++	exit 0
++fi
++
++export PAM_WRAPPER_SERVICE_DIR=$OBJ/pam-ssh-agent-test.d
++
++PAM_SUCCESS=0
++PAM_SERVICE_ERR=3
++
++. $OBJ/keytype_gen.sh
++
++pam_agent_test()
++{
++	rm -rf $PAM_WRAPPER_SERVICE_DIR
++	mkdir -p $PAM_WRAPPER_SERVICE_DIR
++	cat >$PAM_WRAPPER_SERVICE_DIR/other <<EOF
++auth  required  $BUILDDIR/pam_ssh_agent.so  $*
++EOF
++
++	LD_PRELOAD=libpam_wrapper.so \
++	PAM_WRAPPER=1 \
++	$BUILDDIR/$TEST_PAM_SSH_AGENT
++
++	local ret=$?
++	[ "x$ret" = "x$expect" ] || fatal "expected $expect, got $ret"
++}
++
++trace "invalid arguments"
++expect=$PAM_SERVICE_ERR       pam_agent_test invalid arguments
++
++trace "debug argument"
++expect=$PAM_SUCCESS           pam_agent_test debug
++
++trace "without arguments"
++expect=$PAM_SUCCESS           pam_agent_test
+Index: b/pam-ssh-agent.c
+===================================================================
+--- /dev/null
++++ b/pam-ssh-agent.c
+@@ -0,0 +1,88 @@
++/*
++ * Copyright (c) 2020 Domenico Andreoli
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "includes.h"
++
++#include <string.h>
++#include <syslog.h>
++
++#define PAM_SM_AUTH
++#if defined(HAVE_SECURITY_PAM_MODULES_H)
++#include <security/pam_modules.h>
++#elif defined(HAVE_PAM_PAM_MODULES_H)
++#include <pam/pam_modules.h>
++#endif
++
++static int pam_debug;
++
++static int
++parse_args(int argc, const char **argv)
++{
++	int i, invalid = 0;
++
++	for (i=0; i!=argc; i++) {
++		if (!strcmp(argv[i], "debug")) {
++			pam_debug = 1;
++		} else {
++			syslog(LOG_ERR, "invalid argument: %s", argv[i]);
++			invalid++;
++		}
++	}
++
++	return invalid;
++}
++
++int
++pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
++{
++	int ret;
++
++	openlog("pam_ssh_agent_auth", 0, LOG_AUTHPRIV);
++
++	if (parse_args(argc, argv)) {
++		ret = PAM_SERVICE_ERR;
++		goto out;
++	}
++
++	if (pam_debug) {
++		const char *user = "(unknown)";
++		pam_get_user(pamh, &user, NULL);
++		syslog(LOG_DEBUG, "USER: %s", user);
++	}
++
++	ret = PAM_SUCCESS;
++
++out:
++	if (pam_debug)
++		syslog(LOG_DEBUG, "result: %s", pam_strerror(pamh, ret));
++	closelog();
++	return ret;
++}
++
++int
++pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
++{
++	return PAM_SUCCESS;
++}
+Index: b/configure.ac
+===================================================================
+--- a/configure.ac
++++ b/configure.ac
+@@ -392,6 +392,7 @@ AC_CHECK_HEADERS([ \
+ 	ifaddrs.h \
+ 	inttypes.h \
+ 	langinfo.h \
++	libpamtest.h \
+ 	limits.h \
+ 	locale.h \
+ 	login.h \
+@@ -401,12 +402,14 @@ AC_CHECK_HEADERS([ \
+ 	netdb.h \
+ 	netgroup.h \
+ 	pam/pam_appl.h \
++	pam/pam_modules.h \
+ 	paths.h \
+ 	poll.h \
+ 	pty.h \
+ 	readpassphrase.h \
+ 	rpc/types.h \
+ 	security/pam_appl.h \
++	security/pam_modules.h \
+ 	sha2.h \
+ 	shadow.h \
+ 	stddef.h \
+@@ -3352,6 +3355,37 @@ AC_ARG_WITH([pam],
+ 	]
+ )
+ 
++PAM_SSH_AGENT_MSG="no"
++AC_ARG_WITH([pam-ssh-agent],
++	[  --with-pam-ssh-agent    Build PAM module for ssh-agent authentication],
++	[
++		if test "x$withval" != "xno" ; then
++			if test "x$ac_cv_header_security_pam_modules_h" != "xyes" && \
++			   test "x$ac_cv_header_pam_pam_modules_h" != "xyes" ; then
++				AC_MSG_ERROR([PAM headers not found])
++			fi
++
++			AC_SUBST(PAM_SSH_AGENT, [pam_ssh_agent.so])
++			PAM_SSH_AGENT_MSG="yes"
++
++			saved_LIBS="$LIBS"
++			AC_CHECK_LIB([pam_wrapper], [pam_start], , [have_pam_wrapper=no])
++			AC_CHECK_LIB([pamtest], [pamtest_strerror], , [have_pamtest=no])
++			LIBS="$saved_LIBS"
++
++			if test "x$have_pam_wrapper" = "xno" || test "x$have_pamtest" = "xno" ; then
++				PAM_SSH_AGENT_MSG="yes (for testing, install pam_wrapper and libpamtest-dev)"
++			else
++				if test "x$ac_cv_header_libpamtest_h" = "xyes" ; then
++					AC_SUBST(PAM_SSH_AGENT_TEST, [regress/pam-ssh-agent-test\$\(EXEEXT\)])
++				else
++					AC_MSG_ERROR([libpamtest headers not found])
++				fi
++			fi
++		fi
++	]
++)
++
+ AC_ARG_WITH([pam-service],
+ 	[  --with-pam-service=name Specify PAM service name ],
+ 	[
+@@ -5452,6 +5486,7 @@ echo "          sshd superuser user PATH
+ fi
+ echo "                    Manpage format: $MANTYPE"
+ echo "                       PAM support: $PAM_MSG"
++echo "             PAM ssh-agent support: $PAM_SSH_AGENT_MSG"
+ echo "                   OSF SIA support: $SIA_MSG"
+ echo "                 KerberosV support: $KRB5_MSG"
+ echo "                   SELinux support: $SELINUX_MSG"
+Index: b/config.h.in
+===================================================================
+--- a/config.h.in
++++ b/config.h.in
+@@ -843,6 +843,9 @@
+ /* Define to 1 if you have the `pam' library (-lpam). */
+ #undef HAVE_LIBPAM
+ 
++/* Define to 1 if you have the <libpamtest.h> header file. */
++#undef HAVE_LIBPAMTEST_H
++
+ /* Define to 1 if you have the <libproc.h> header file. */
+ #undef HAVE_LIBPROC_H
+ 
+@@ -1007,6 +1010,9 @@
+ /* Define to 1 if you have the <pam/pam_appl.h> header file. */
+ #undef HAVE_PAM_PAM_APPL_H
+ 
++/* Define to 1 if you have the <pam/pam_modules.h> header file. */
++#undef HAVE_PAM_PAM_MODULES_H
++
+ /* Define to 1 if you have the `pam_putenv' function. */
+ #undef HAVE_PAM_PUTENV
+ 
+@@ -1152,6 +1158,9 @@
+ /* Define to 1 if you have the <security/pam_appl.h> header file. */
+ #undef HAVE_SECURITY_PAM_APPL_H
+ 
++/* Define to 1 if you have the <security/pam_modules.h> header file. */
++#undef HAVE_SECURITY_PAM_MODULES_H
++
+ /* Define to 1 if you have the `sendmsg' function. */
+ #undef HAVE_SENDMSG
+ 
+Index: b/regress/keytype_gen.sh
+===================================================================
+--- /dev/null
++++ b/regress/keytype_gen.sh
+@@ -0,0 +1,43 @@
++#	$OpenBSD: keytype.sh,v 1.10 2019/12/16 02:39:05 djm Exp $
++#	Placed in the Public Domain.
++
++# Construct list of key types based on what the built binaries support.
++ktypes=""
++for i in ${SSH_KEYTYPES}; do
++	case "$i" in
++		ssh-dss)		ktypes="$ktypes dsa-1024" ;;
++		ssh-rsa)		ktypes="$ktypes rsa-2048 rsa-3072" ;;
++		ssh-ed25519)		ktypes="$ktypes ed25519-512" ;;
++		ecdsa-sha2-nistp256)	ktypes="$ktypes ecdsa-256" ;;
++		ecdsa-sha2-nistp384)	ktypes="$ktypes ecdsa-384" ;;
++		ecdsa-sha2-nistp521)	ktypes="$ktypes ecdsa-521" ;;
++		sk-ssh-ed25519*)	ktypes="$ktypes ed25519-sk" ;;
++		sk-ecdsa-sha2-nistp256*) ktypes="$ktypes ecdsa-sk" ;;
++	esac
++done
++
++for kt in $ktypes; do
++	rm -f $OBJ/key.$kt
++	xbits=`echo ${kt} | awk -F- '{print $2}'`
++	xtype=`echo ${kt}  | awk -F- '{print $1}'`
++	case "$kt" in
++	*sk)	type="$kt"; bits="n/a"; bits_arg="";;
++	*)	type=$xtype; bits=$xbits; bits_arg="-b $bits";;
++	esac
++	verbose "keygen $type, $bits bits"
++	${SSHKEYGEN} $bits_arg -q -N '' -t $type -C "$kt" -f $OBJ/key.$kt || \
++		fail "ssh-keygen for type $type, $bits bits failed"
++done
++
++kname_to_ktype() {
++	case $1 in
++	dsa-1024)	echo ssh-dss;;
++	ecdsa-256)	echo ecdsa-sha2-nistp256;;
++	ecdsa-384)	echo ecdsa-sha2-nistp384;;
++	ecdsa-521)	echo ecdsa-sha2-nistp521;;
++	ed25519-512)	echo ssh-ed25519;;
++	rsa-*)		echo rsa-sha2-512,rsa-sha2-256,ssh-rsa;;
++	ed25519-sk)	echo sk-ssh-ed25519@openssh.com;;
++	ecdsa-sk)	echo sk-ecdsa-sha2-nistp256@openssh.com;;
++	esac
++}
+Index: b/regress/keytype.sh
+===================================================================
+--- a/regress/keytype.sh
++++ b/regress/keytype.sh
+@@ -6,46 +6,7 @@ tid="login with different key types"
+ cp $OBJ/sshd_proxy $OBJ/sshd_proxy_bak
+ cp $OBJ/ssh_proxy $OBJ/ssh_proxy_bak
+ 
+-# Construct list of key types based on what the built binaries support.
+-ktypes=""
+-for i in ${SSH_KEYTYPES}; do
+-	case "$i" in
+-		ssh-dss)		ktypes="$ktypes dsa-1024" ;;
+-		ssh-rsa)		ktypes="$ktypes rsa-2048 rsa-3072" ;;
+-		ssh-ed25519)		ktypes="$ktypes ed25519-512" ;;
+-		ecdsa-sha2-nistp256)	ktypes="$ktypes ecdsa-256" ;;
+-		ecdsa-sha2-nistp384)	ktypes="$ktypes ecdsa-384" ;;
+-		ecdsa-sha2-nistp521)	ktypes="$ktypes ecdsa-521" ;;
+-		sk-ssh-ed25519*)	ktypes="$ktypes ed25519-sk" ;;
+-		sk-ecdsa-sha2-nistp256*) ktypes="$ktypes ecdsa-sk" ;;
+-	esac
+-done
+-
+-for kt in $ktypes; do
+-	rm -f $OBJ/key.$kt
+-	xbits=`echo ${kt} | awk -F- '{print $2}'`
+-	xtype=`echo ${kt}  | awk -F- '{print $1}'`
+-	case "$kt" in
+-	*sk)	type="$kt"; bits="n/a"; bits_arg="";;
+-	*)	type=$xtype; bits=$xbits; bits_arg="-b $bits";;
+-	esac
+-	verbose "keygen $type, $bits bits"
+-	${SSHKEYGEN} $bits_arg -q -N '' -t $type  -f $OBJ/key.$kt || \
+-		fail "ssh-keygen for type $type, $bits bits failed"
+-done
+-
+-kname_to_ktype() {
+-	case $1 in
+-	dsa-1024)	echo ssh-dss;;
+-	ecdsa-256)	echo ecdsa-sha2-nistp256;;
+-	ecdsa-384)	echo ecdsa-sha2-nistp384;;
+-	ecdsa-521)	echo ecdsa-sha2-nistp521;;
+-	ed25519-512)	echo ssh-ed25519;;
+-	rsa-*)		echo rsa-sha2-512,rsa-sha2-256,ssh-rsa;;
+-	ed25519-sk)	echo sk-ssh-ed25519@openssh.com;;
+-	ecdsa-sk)	echo sk-ecdsa-sha2-nistp256@openssh.com;;
+-	esac
+-}
++. $OBJ/keytype_gen.sh
+ 
+ tries="1 2 3"
+ for ut in $ktypes; do
+Index: b/openbsd-compat/Makefile.in
+===================================================================
+--- a/openbsd-compat/Makefile.in
++++ b/openbsd-compat/Makefile.in
+@@ -17,6 +17,8 @@ INSTALL=@INSTALL@
+ LDFLAGS=-L. @LDFLAGS@
+ LDFLAGS_NOPIE=-L. -Lopenbsd-compat/ @LDFLAGS_NOPIE@
+ 
++.SUFFIXES: .lo
++
+ OPENBSD=base64.o \
+ 	basename.o \
+ 	bcrypt_pbkdf.o \
+@@ -101,7 +103,7 @@ PORTS=	port-aix.o \
+ .c.o:
+ 	$(CC) $(CFLAGS_NOPIE) $(PICFLAG) $(CPPFLAGS) -c $<
+ 
+-all: libopenbsd-compat.a
++all: libopenbsd-compat.a libopenbsd-compat-pic.a
+ 
+ $(COMPAT): ../config.h
+ $(OPENBSD): ../config.h
+@@ -111,8 +113,15 @@ libopenbsd-compat.a:  $(COMPAT) $(OPENBS
+ 	$(AR) rv $@ $(COMPAT) $(OPENBSD) $(PORTS)
+ 	$(RANLIB) $@
+ 
++libopenbsd-compat-pic.a: $(COMPAT:.o=.lo) $(OPENBSD:.o=.lo) $(PORTS:.o=.lo)
++	$(AR) rv $@ $^
++	$(RANLIB) $@
++
++.c.lo: Makefile.in config.h
++	$(CC) $(CFLAGS_NOPIE) $(PICFLAG) $(CPPFLAGS) -c $< -o $@
++
+ clean:
+-	rm -f *.o *.a core
++	rm -f *.o *.lo *.a core
+ 
+ distclean: clean
+ 	rm -f Makefile *~
