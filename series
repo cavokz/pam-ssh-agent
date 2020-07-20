@@ -1,3 +1,4 @@
 pam-ssh-agent-dev-test-cycle
 pam-ssh-agent-auth-file
 pam-ssh-agent-auth-socket
+pam-ssh-agent-auth-verify
