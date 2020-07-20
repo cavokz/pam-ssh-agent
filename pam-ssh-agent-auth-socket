@@ -1,0 +1,130 @@
+pam-ssh-agent: Add connecting to the SSH agent
+
+The module now connects to the agent and fetches the identities therein
+stored, if any.
+
+Tests verify the behavior in case of missing SSH_AUTH_SOCK, communication
+issues and empty ssh-agent.
+
+Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
+
+---
+ pam-ssh-agent.c          |   31 +++++++++++++++++++++++++++++++
+ regress/pam-ssh-agent.sh |   24 ++++++++++++++++++++++++
+ 2 files changed, 55 insertions(+)
+
+Index: b/pam-ssh-agent.c
+===================================================================
+--- a/pam-ssh-agent.c
++++ b/pam-ssh-agent.c
+@@ -38,6 +38,7 @@
+ #include "authfile.h"
+ #include "authfd.h"
+ #include "ssherr.h"
++#include "ssh.h"
+ 
+ static int pam_debug;
+ static const char *auth_file;
+@@ -97,7 +98,9 @@ ssh_read_identitylist(const char *filena
+ int
+ pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
+ {
++	struct ssh_identitylist *agent_ids = NULL;
+ 	struct ssh_identitylist *auth_ids = NULL;
++	int agent_fd = -1;
+ 	int ret;
+ 
+ 	openlog("pam_ssh_agent_auth", 0, LOG_AUTHPRIV);
+@@ -108,10 +111,13 @@ pam_sm_authenticate(pam_handle_t *pamh,
+ 	}
+ 
+ 	if (pam_debug) {
++		const char *auth_socket = getenv(SSH_AUTHSOCKET_ENV_NAME);
+ 		const char *user = "(unknown)";
+ 		pam_get_user(pamh, &user, NULL);
+ 		syslog(LOG_DEBUG, "USER: %s", user);
+ 		syslog(LOG_DEBUG, "FILE: %s", auth_file ? auth_file : "(null)");
++		auth_socket = auth_socket ? auth_socket : "(null)";
++		syslog(LOG_DEBUG, "%s: %s", SSH_AUTHSOCKET_ENV_NAME, auth_socket);
+ 	}
+ 
+ 	if (auth_file == NULL) {
+@@ -134,9 +140,34 @@ pam_sm_authenticate(pam_handle_t *pamh,
+ 			syslog(LOG_DEBUG, "  %d) %s", i, auth_ids->comments[i]);
+ 	}
+ 
++	ret = ssh_get_authentication_socket(&agent_fd);
++	if (ret) {
++		syslog(LOG_NOTICE, "agent error: %s", ssh_err(ret));
++		ret = PAM_AUTH_ERR;
++		goto out;
++	}
++
++	ret = ssh_fetch_identitylist(agent_fd, &agent_ids);
++	if (ret) {
++		syslog(LOG_NOTICE, "agent error: %s", ssh_err(ret));
++		ret = PAM_AUTH_ERR;
++		goto out;
++	}
++
++	if (pam_debug) {
++		unsigned i;
++		syslog(LOG_DEBUG, "agent has %u key(s):", (unsigned) agent_ids->nkeys);
++		for (i=0; i!=agent_ids->nkeys; i++)
++			syslog(LOG_DEBUG, "  %d) %s", i, agent_ids->comments[i]);
++	}
++
+ 	ret = PAM_SUCCESS;
+ 
+ out:
++	if (agent_fd != -1)
++		ssh_close_authentication_socket(agent_fd);
++	if (agent_ids != NULL)
++		ssh_free_identitylist(agent_ids);
+ 	if (auth_ids != NULL)
+ 		ssh_free_identitylist(auth_ids);
+ 	if (pam_debug)
+Index: b/regress/pam-ssh-agent.sh
+===================================================================
+--- a/regress/pam-ssh-agent.sh
++++ b/regress/pam-ssh-agent.sh
+@@ -14,6 +14,7 @@ export PAM_WRAPPER_SERVICE_DIR=$OBJ/pam-
+ 
+ PAM_SUCCESS=0
+ PAM_SERVICE_ERR=3
++PAM_AUTH_ERR=7
+ PAM_AUTHINFO_UNAVAIL=9
+ 
+ . $OBJ/keytype_gen.sh
+@@ -52,8 +53,31 @@ expect=$PAM_AUTHINFO_UNAVAIL  pam_agent_
+ trace "with empty auth file"
+ expect=$PAM_AUTHINFO_UNAVAIL  pam_agent_test file=/dev/null
+ 
++trace "start agent"
++eval `${SSHAGENT} ${EXTRA_AGENT_ARGS} -s` > /dev/null
++r=$?
++if [ $r -ne 0 ]; then
++	fatal "could not start ssh-agent: exit code $r"
++fi
++
++trace "load key into the agent"
++${SSHADD} -q $OBJ/key.$first_kt
++r=$?
++if [ $r -ne 0 ]; then
++	fatal "could not add the key: exit code $r"
++fi
++
+ trace "authenticate agent (debug)"
+ expect=$PAM_SUCCESS           pam_agent_test file=$AUTH_FILE debug
+ 
+ trace "authenticate agent (non-debug)"
+ expect=$PAM_SUCCESS           pam_agent_test file=$AUTH_FILE
++
++trace "kill agent"
++${SSHAGENT} -k > /dev/null
++
++trace "agent is gone (debug)"
++expect=$PAM_AUTH_ERR          pam_agent_test file=$AUTH_FILE debug
++
++trace "agent is gone (non-debug)"
++expect=$PAM_AUTH_ERR          pam_agent_test file=$AUTH_FILE
