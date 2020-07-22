@@ -17,7 +17,7 @@ The module is not built by default.
 Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
 
 ---
- Makefile.in                  |   27 ++++++++++++-
+ Makefile.in                  |   28 +++++++++++++-
  config.h.in                  |    9 ++++
  configure.ac                 |   35 +++++++++++++++++
  openbsd-compat/Makefile.in   |   13 +++++-
@@ -26,7 +26,7 @@ Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
  regress/keytype.sh           |   41 --------------------
  regress/keytype_gen.sh       |   43 +++++++++++++++++++++
  regress/pam-ssh-agent-test.c |   48 +++++++++++++++++++++++
- regress/pam-ssh-agent.sh     |   43 +++++++++++++++++++++
+ regress/pam-ssh-agent.sh     |   42 +++++++++++++++++++++
  10 files changed, 305 insertions(+), 44 deletions(-)
 
 Index: b/regress/pam-ssh-agent-test.c
@@ -190,17 +190,18 @@ Index: b/Makefile.in
  	rm -f regress/unittests/test_helper/*.a
  	rm -f regress/unittests/test_helper/*.o
  	rm -f regress/unittests/sshbuf/*.o
-@@ -521,6 +539,9 @@ regress/mkdtemp$(EXEEXT): $(srcdir)/regr
+@@ -521,6 +539,10 @@ regress/mkdtemp$(EXEEXT): $(srcdir)/regr
  	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(srcdir)/regress/mkdtemp.c \
  	$(LDFLAGS) -lssh -lopenbsd-compat -lssh -lopenbsd-compat $(LIBS)
  
 +regress/pam-ssh-agent-test$(EXEEXT): $(srcdir)/regress/pam-ssh-agent-test.c
-+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(srcdir)/regress/pam-ssh-agent-test.c $(LDFLAGS) -lpamtest
++	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(srcdir)/regress/pam-ssh-agent-test.c \
++	$(LDFLAGS) -lpam_wrapper -lpamtest
 +
  UNITTESTS_TEST_HELPER_OBJS=\
  	regress/unittests/test_helper/test_helper.o \
  	regress/unittests/test_helper/fuzz.o
-@@ -650,6 +671,7 @@ regress-binaries: regress-prep $(LIBCOMP
+@@ -650,6 +672,7 @@ regress-binaries: regress-prep $(LIBCOMP
  	regress/netcat$(EXEEXT) \
  	regress/check-perm$(EXEEXT) \
  	regress/mkdtemp$(EXEEXT) \
@@ -208,7 +209,7 @@ Index: b/Makefile.in
  	$(SK_DUMMY_LIBRARY)
  
  regress-unit-binaries: regress-prep $(REGRESSLIBS) \
-@@ -686,6 +708,7 @@ interop-tests t-exec file-tests: regress
+@@ -686,6 +709,7 @@ interop-tests t-exec file-tests: regress
  		PATH="$${BUILDDIR}:$${PATH}" \
  		TEST_ENV=MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
  		TEST_MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
@@ -220,7 +221,7 @@ Index: b/regress/pam-ssh-agent.sh
 ===================================================================
 --- /dev/null
 +++ b/regress/pam-ssh-agent.sh
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,42 @@
 +#       Placed in the Public Domain.
 +
 +# Kudos to the Samba team, pam_wrapper made this module possible
@@ -248,7 +249,6 @@ Index: b/regress/pam-ssh-agent.sh
 +auth  required  $BUILDDIR/pam_ssh_agent.so  $*
 +EOF
 +
-+	LD_PRELOAD=libpam_wrapper.so \
 +	PAM_WRAPPER=1 \
 +	$BUILDDIR/$TEST_PAM_SSH_AGENT
 +
