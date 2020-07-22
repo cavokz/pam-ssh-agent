@@ -26,8 +26,8 @@ Index: b/pam-ssh-agent.c
  #include "ssh.h"
  
  static int pam_debug;
-@@ -96,6 +97,35 @@ out:
- 	return r;
+@@ -121,6 +122,35 @@ pam_ssh_fetch_identitylist(int *fd, stru
+ 	return ssh_fetch_identitylist(*fd, idlp);
  }
  
 +static int
@@ -62,7 +62,7 @@ Index: b/pam-ssh-agent.c
  int
  pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
  {
-@@ -169,8 +199,7 @@ pam_sm_authenticate(pam_handle_t *pamh,
+@@ -188,8 +218,7 @@ pam_sm_authenticate(pam_handle_t *pamh,
  			syslog(LOG_DEBUG, "  %d) %s", i, agent_ids->comments[i]);
  	}
  

@@ -9,9 +9,9 @@ issues and empty ssh-agent.
 Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
 
 ---
- pam-ssh-agent.c          |   27 +++++++++++++++++++++++++++
+ pam-ssh-agent.c          |   46 ++++++++++++++++++++++++++++++++++++++++++++++
  regress/pam-ssh-agent.sh |   24 ++++++++++++++++++++++++
- 2 files changed, 51 insertions(+)
+ 2 files changed, 70 insertions(+)
 
 Index: b/pam-ssh-agent.c
 ===================================================================
@@ -25,7 +25,35 @@ Index: b/pam-ssh-agent.c
  
  static int pam_debug;
  static const char *auth_file;
-@@ -98,9 +99,11 @@ out:
+@@ -95,12 +96,39 @@ out:
+ 	return r;
+ }
+ 
++static int
++pam_ssh_fetch_identitylist(int *fd, struct ssh_identitylist **idlp)
++{
++	struct stat st;
++	int r;
++
++	if (setreuid(geteuid(), getuid()) != 0)
++		return SSH_ERR_SYSTEM_ERROR;
++	r = ssh_get_authentication_socket(fd);
++	setreuid(geteuid(), getuid());
++	if (r)
++		return r;
++	if (fstat(*fd, &st) == -1) {
++		close(*fd);
++		return SSH_ERR_SYSTEM_ERROR;
++	}
++	if (pam_debug)
++		syslog(LOG_DEBUG, "agent socket uid=%u", (unsigned) st.st_uid);
++	if (st.st_uid != getuid()) {
++		close(*fd);
++		return SSH_ERR_KEY_BAD_PERMISSIONS;
++	}
++	return ssh_fetch_identitylist(*fd, idlp);
++}
++
  int
  pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
  {
@@ -37,7 +65,7 @@ Index: b/pam-ssh-agent.c
  	int ret;
  
  	openlog("pam_ssh_agent_auth", 0, LOG_AUTHPRIV);
-@@ -120,12 +123,15 @@ pam_sm_authenticate(pam_handle_t *pamh,
+@@ -120,12 +148,15 @@ pam_sm_authenticate(pam_handle_t *pamh,
  		goto out;
  	}
  	if (pam_debug) {
@@ -53,17 +81,11 @@ Index: b/pam-ssh-agent.c
  	}
  	if (auth_file == NULL) {
  		syslog(LOG_ERR, "auth file error: file= is not specified");
-@@ -144,12 +150,33 @@ pam_sm_authenticate(pam_handle_t *pamh,
+@@ -144,12 +175,27 @@ pam_sm_authenticate(pam_handle_t *pamh,
  		for (i=0; i!=auth_ids->nkeys; i++)
  			syslog(LOG_DEBUG, "  %d) %s", i, auth_ids->comments[i]);
  	}
-+	ret = ssh_get_authentication_socket(&agent_fd);
-+	if (ret) {
-+		syslog(LOG_NOTICE, "agent error: %s", ssh_err(ret));
-+		ret = PAM_AUTH_ERR;
-+		goto out;
-+	}
-+	ret = ssh_fetch_identitylist(agent_fd, &agent_ids);
++	ret = pam_ssh_fetch_identitylist(&agent_fd, &agent_ids);
 +	if (ret) {
 +		syslog(LOG_NOTICE, "agent error: %s", ssh_err(ret));
 +		ret = PAM_AUTH_ERR;
