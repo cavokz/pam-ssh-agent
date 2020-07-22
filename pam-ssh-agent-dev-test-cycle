@@ -17,17 +17,17 @@ The module is not built by default.
 Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
 
 ---
- Makefile.in                  |   28 +++++++++++++-
+ Makefile.in                  |   28 +++++++++++-
  config.h.in                  |    9 ++++
- configure.ac                 |   35 +++++++++++++++++
- openbsd-compat/Makefile.in   |   13 +++++-
- pam-ssh-agent.c              |   88 +++++++++++++++++++++++++++++++++++++++++++
+ configure.ac                 |   35 +++++++++++++++
+ openbsd-compat/Makefile.in   |   13 ++++-
+ pam-ssh-agent.c              |  102 +++++++++++++++++++++++++++++++++++++++++++
  regress/Makefile             |    2 +
- regress/keytype.sh           |   41 --------------------
- regress/keytype_gen.sh       |   43 +++++++++++++++++++++
- regress/pam-ssh-agent-test.c |   48 +++++++++++++++++++++++
- regress/pam-ssh-agent.sh     |   42 +++++++++++++++++++++
- 10 files changed, 305 insertions(+), 44 deletions(-)
+ regress/keytype.sh           |   41 -----------------
+ regress/keytype_gen.sh       |   43 ++++++++++++++++++
+ regress/pam-ssh-agent-test.c |   48 ++++++++++++++++++++
+ regress/pam-ssh-agent.sh     |   42 ++++++++++++++++++
+ 10 files changed, 319 insertions(+), 44 deletions(-)
 
 Index: b/regress/pam-ssh-agent-test.c
 ===================================================================
@@ -268,7 +268,7 @@ Index: b/pam-ssh-agent.c
 ===================================================================
 --- /dev/null
 +++ b/pam-ssh-agent.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,102 @@
 +/*
 + * Copyright (c) 2020 Domenico Andreoli
 + *
@@ -298,6 +298,7 @@ Index: b/pam-ssh-agent.c
 +
 +#include <string.h>
 +#include <syslog.h>
++#include <unistd.h>
 +
 +#define PAM_SM_AUTH
 +#if defined(HAVE_SECURITY_PAM_MODULES_H)
@@ -328,6 +329,8 @@ Index: b/pam-ssh-agent.c
 +int
 +pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
 +{
++	struct passwd *pw;
++	const char *user;
 +	int ret;
 +
 +	openlog("pam_ssh_agent_auth", 0, LOG_AUTHPRIV);
@@ -336,11 +339,22 @@ Index: b/pam-ssh-agent.c
 +		ret = PAM_SERVICE_ERR;
 +		goto out;
 +	}
-+
++	if (pam_get_user(pamh, &user, NULL)) {
++		syslog(LOG_NOTICE, "PAM_USER is not set");
++		ret = PAM_AUTH_ERR;
++		goto out;
++	}
++	if ((pw = getpwnam(user)) == NULL) {
++		syslog(LOG_NOTICE, "user not found: %s", user);
++		ret = PAM_AUTH_ERR;
++		goto out;
++	}
 +	if (pam_debug) {
-+		const char *user = "(unknown)";
-+		pam_get_user(pamh, &user, NULL);
-+		syslog(LOG_DEBUG, "USER: %s", user);
++		struct passwd *rpw = getpwuid(getuid());
++		struct passwd *epw = getpwuid(geteuid());
++		syslog(LOG_DEBUG, "from: %u(%s), to: %u(%s), via: %u(%s)",
++			getuid(), rpw ? rpw->pw_name : "(null)", pw->pw_uid, pw->pw_name,
++			geteuid(), epw ? epw->pw_name : "(null)");
 +	}
 +
 +	ret = PAM_SUCCESS;

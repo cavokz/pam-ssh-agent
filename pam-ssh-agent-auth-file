@@ -12,15 +12,15 @@ modules and keys would be shared via PAM environment (to be implemented).
 Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
 
 ---
- pam-ssh-agent.c          |   64 +++++++++++++++++++++++++++++++++++++++++++++++
- regress/pam-ssh-agent.sh |   24 +++++++++++++++---
- 2 files changed, 84 insertions(+), 4 deletions(-)
+ pam-ssh-agent.c          |   60 +++++++++++++++++++++++++++++++++++++++++++++++
+ regress/pam-ssh-agent.sh |   24 ++++++++++++++++---
+ 2 files changed, 80 insertions(+), 4 deletions(-)
 
 Index: b/pam-ssh-agent.c
 ===================================================================
 --- a/pam-ssh-agent.c
 +++ b/pam-ssh-agent.c
-@@ -35,7 +35,12 @@
+@@ -36,7 +36,12 @@
  #include <pam/pam_modules.h>
  #endif
  
@@ -33,7 +33,7 @@ Index: b/pam-ssh-agent.c
  
  static int
  parse_args(int argc, const char **argv)
-@@ -45,6 +50,14 @@ parse_args(int argc, const char **argv)
+@@ -46,6 +51,14 @@ parse_args(int argc, const char **argv)
  	for (i=0; i!=argc; i++) {
  		if (!strcmp(argv[i], "debug")) {
  			pam_debug = 1;
@@ -48,7 +48,7 @@ Index: b/pam-ssh-agent.c
  		} else {
  			syslog(LOG_ERR, "invalid argument: %s", argv[i]);
  			invalid++;
-@@ -54,9 +67,37 @@ parse_args(int argc, const char **argv)
+@@ -55,9 +68,37 @@ parse_args(int argc, const char **argv)
  	return invalid;
  }
  
@@ -83,29 +83,26 @@ Index: b/pam-ssh-agent.c
  pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
  {
 +	struct ssh_identitylist *auth_ids = NULL;
+ 	struct passwd *pw;
+ 	const char *user;
  	int ret;
- 
- 	openlog("pam_ssh_agent_auth", 0, LOG_AUTHPRIV);
-@@ -70,11 +111,34 @@ pam_sm_authenticate(pam_handle_t *pamh,
- 		const char *user = "(unknown)";
- 		pam_get_user(pamh, &user, NULL);
- 		syslog(LOG_DEBUG, "USER: %s", user);
-+		syslog(LOG_DEBUG, "FILE: %s", auth_file ? auth_file : "(null)");
+@@ -84,6 +125,24 @@ pam_sm_authenticate(pam_handle_t *pamh,
+ 		syslog(LOG_DEBUG, "from: %u(%s), to: %u(%s), via: %u(%s)",
+ 			getuid(), rpw ? rpw->pw_name : "(null)", pw->pw_uid, pw->pw_name,
+ 			geteuid(), epw ? epw->pw_name : "(null)");
++		syslog(LOG_DEBUG, "FILE: %s", auth_file);
 +	}
-+
 +	if (auth_file == NULL) {
 +		syslog(LOG_ERR, "auth file error: file= is not specified");
 +		ret = PAM_SERVICE_ERR;
 +		goto out;
 +	}
-+
 +	ret = ssh_read_identitylist(auth_file, &auth_ids);
 +	if (ret) {
 +		syslog(LOG_ERR, "auth file error: %s: %s", ssh_err(ret), auth_file);
 +		ret = PAM_AUTHINFO_UNAVAIL;
 +		goto out;
 +	}
-+
 +	if (pam_debug) {
 +		unsigned i;
 +		syslog(LOG_DEBUG, "auth file has %u key(s):", (unsigned) auth_ids->nkeys);
@@ -114,13 +111,14 @@ Index: b/pam-ssh-agent.c
  	}
  
  	ret = PAM_SUCCESS;
- 
+@@ -91,6 +150,7 @@ pam_sm_authenticate(pam_handle_t *pamh,
  out:
-+	if (auth_ids != NULL)
-+		ssh_free_identitylist(auth_ids);
  	if (pam_debug)
  		syslog(LOG_DEBUG, "result: %s", pam_strerror(pamh, ret));
++	ssh_free_identitylist(auth_ids);
  	closelog();
+ 	return ret;
+ }
 Index: b/regress/pam-ssh-agent.sh
 ===================================================================
 --- a/regress/pam-ssh-agent.sh
@@ -139,7 +137,7 @@ Index: b/regress/pam-ssh-agent.sh
  pam_agent_test()
  {
  	rm -rf $PAM_WRAPPER_SERVICE_DIR
-@@ -36,8 +40,20 @@ EOF
+@@ -35,8 +39,20 @@ EOF
  trace "invalid arguments"
  expect=$PAM_SERVICE_ERR       pam_agent_test invalid arguments
  

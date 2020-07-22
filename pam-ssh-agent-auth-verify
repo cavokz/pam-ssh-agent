@@ -10,15 +10,15 @@ round with all the supported key types is also performed.
 Signed-off-by: Domenico Andreoli <domenico.andreoli@linux.com>
 
 ---
- pam-ssh-agent.c          |   33 ++++++++++++++++++++++++++++++++-
+ pam-ssh-agent.c          |   33 +++++++++++++++++++++++++++++++--
  regress/pam-ssh-agent.sh |   23 +++++++++++++++++++++++
- 2 files changed, 55 insertions(+), 1 deletion(-)
+ 2 files changed, 54 insertions(+), 2 deletions(-)
 
 Index: b/pam-ssh-agent.c
 ===================================================================
 --- a/pam-ssh-agent.c
 +++ b/pam-ssh-agent.c
-@@ -38,6 +38,7 @@
+@@ -39,6 +39,7 @@
  #include "authfile.h"
  #include "authfd.h"
  #include "ssherr.h"
@@ -26,7 +26,7 @@ Index: b/pam-ssh-agent.c
  #include "ssh.h"
  
  static int pam_debug;
-@@ -95,6 +96,36 @@ out:
+@@ -96,6 +97,35 @@ out:
  	return r;
  }
  
@@ -42,8 +42,7 @@ Index: b/pam-ssh-agent.c
 +	ret = ssh_agent_sign(agent_fd, agent_key, &sig, &slen, data, sizeof(data), NULL, 0) ||
 +	      sshkey_verify(auth_key, sig, slen, data, sizeof(data), NULL, 0, NULL);
 +
-+	if (sig != NULL)
-+		free(sig);
++	free(sig);
 +	return !ret;
 +}
 +
@@ -63,15 +62,16 @@ Index: b/pam-ssh-agent.c
  int
  pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
  {
-@@ -161,7 +192,7 @@ pam_sm_authenticate(pam_handle_t *pamh,
+@@ -169,8 +199,7 @@ pam_sm_authenticate(pam_handle_t *pamh,
  			syslog(LOG_DEBUG, "  %d) %s", i, agent_ids->comments[i]);
  	}
  
 -	ret = PAM_SUCCESS;
+-
 +	ret = authenticate_agent(agent_fd, agent_ids, auth_ids);
- 
  out:
- 	if (agent_fd != -1)
+ 	if (pam_debug)
+ 		syslog(LOG_DEBUG, "result: %s", pam_strerror(pamh, ret));
 Index: b/regress/pam-ssh-agent.sh
 ===================================================================
 --- a/regress/pam-ssh-agent.sh
@@ -86,7 +86,7 @@ Index: b/regress/pam-ssh-agent.sh
  
  pam_agent_test()
  {
-@@ -73,6 +75,27 @@ expect=$PAM_SUCCESS           pam_agent_
+@@ -72,6 +74,27 @@ expect=$PAM_SUCCESS           pam_agent_
  trace "authenticate agent (non-debug)"
  expect=$PAM_SUCCESS           pam_agent_test file=$AUTH_FILE
  
